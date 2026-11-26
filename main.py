@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 import sqlite3
 from datetime import datetime
 from typing import Optional
@@ -23,8 +24,8 @@ from aiogram.types import (
 from docx import Document
 from google import genai
 from pptx import Presentation
-from pptx.enum.shapes import MSO_SHAPE
 from pptx.dml.color import RGBColor
+from pptx.enum.shapes import MSO_SHAPE
 from pptx.util import Inches, Pt
 
 # ================= SOZLAMALAR =================
@@ -35,14 +36,13 @@ ADMIN_IDS = [
     int(x) for x in os.getenv("ADMIN_IDS", "8052376816").split(",") if x.strip().isdigit()
 ]
 CARD_NUMBER = os.getenv("CARD_NUMBER", "4073 4200 7949 1878").strip()
-CARD_OWNER = os.getenv("CARD_OWNER", "NAZARBEK NORBOYEV .").strip()
+CARD_OWNER = os.getenv("CARD_OWNER", "NAZARBEK NORBOYEV").strip()
 PRICE_PER_SLIDE = int(os.getenv("PRICE_PER_SLIDE", "350"))
 
 DB_PATH = "slayd_bot_manual_topup.db"
 OUT_DIR = "generated_files"
 os.makedirs(OUT_DIR, exist_ok=True)
 
-# Gemini Klienti
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 # ================= BAZA (SQLite) =================
@@ -166,6 +166,15 @@ def main_menu_kb(user_id: int) -> ReplyKeyboardMarkup:
     if is_admin(user_id):
         rows.append([KeyboardButton(text="🛠 Admin panel")])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def admin_panel_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⏳ Kutilayotgan to‘lovlar", callback_data="adm:pending")],
+            [InlineKeyboardButton(text="📊 Statistika", callback_data="adm:stats")],
+        ]
+    )
 
 
 def back_kb() -> ReplyKeyboardMarkup:
@@ -306,29 +315,117 @@ class Flow(StatesGroup):
     waiting_admin_custom_amount = State()
 
 
-# ================= GEMINI AI GENERATSIYASI =================
-def generate_slide_content_with_gemini(topic: str, slide_count: int, language: str) -> list[dict]:
-    if not client:
+# ================= GEMINI AI & KONTENT =================
+def _extract_json_array(raw_text: str) -> list[dict]:
+    if not raw_text:
+        return []
+    cleaned = raw_text.strip()
+    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
+
+    match = re.search(r"\[[\s\S]*\]", cleaned)
+    if match:
+        cleaned = match.group(0)
+
+    parsed = json.loads(cleaned)
+    if not isinstance(parsed, list):
         return []
 
+    result = []
+    for item in parsed:
+        if isinstance(item, dict):
+            title = str(item.get("title", "")).strip()
+            bullets = item.get("bullets", [])
+            if isinstance(bullets, list):
+                clean_bullets = [str(b).strip() for b in bullets if str(b).strip()][:4]
+            else:
+                clean_bullets = []
+            if title and clean_bullets:
+                result.append({"title": title[:110], "bullets": clean_bullets})
+    return result
+
+
+def _fallback_slides(topic: str, count: int) -> list[dict]:
+    templates = [
+        (
+            f"{topic}: Kirish va umumiy tushuncha",
+            [
+                f"«{topic}» mavzusining dolzarbligi va asosiy mohiyati.",
+                "Tushunchaning shakllanish tarixi hamda asosiy xususiyatlari.",
+                "Soha rivojidagi o‘rni va bugungi kundagi ahamiyati.",
+                "Mavzuni chuqur o‘rganishning asosiy yo‘nalishlari.",
+            ],
+        ),
+        (
+            f"{topic}: Asosiy bosqichlar va tamoyillar",
+            [
+                "Jarayonning bosqichma-bosqich rivojlanish ketma-ketligi.",
+                "Asosiy qonuniyatlar, mezonlar va ishlash prinsiplari.",
+                "Tizimli yondashuv orqali natijadorlikni oshirish usullari.",
+                "Boshqa sohalar bilan o‘zaro bog‘liqligi.",
+            ],
+        ),
+        (
+            f"{topic}: Amaliy qo‘llanilishi va misollar",
+            [
+                "Kundalik hayot va amaliyotda qo‘llanishining asosiy holatlari.",
+                "Samarali yechimlar orqali erishiladigan amaliy natijalar.",
+                "Zamonaviy texnologiyalar va metodlarning uyg‘unligi.",
+                "Tajriba va amaliy kuzatishlardan olingan saboqlar.",
+            ],
+        ),
+        (
+            f"{topic}: Dolzarb muammolar va yechimlar",
+            [
+                "Sohada uchraydigan asosiy muammolar va cheklovlar tahlili.",
+                "Ushbu muammolarning yuzaga kelish sabablari.",
+                "Ularni bartaraf etish bo‘yicha amaliy taklif va chora-tadbirlar.",
+                "Barqaror rivojlanish uchun ustuvor vazifalar.",
+            ],
+        ),
+        (
+            f"{topic}: Yakuniy xulosalar",
+            [
+                f"«{topic}» bo‘yicha asosiy nazariy va amaliy xulosalar.",
+                "Kelajakdagi rivojlanish istiqbollari va yangi imkoniyatlar.",
+                "Tavsiya etiladigan asosiy yo‘nalishlar.",
+                "Mavzu yuzasidan umumiy yakuniy fikr.",
+            ],
+        ),
+    ]
+    slides = []
+    for i in range(max(0, count)):
+        t_title, t_bullets = templates[i % len(templates)]
+        if i >= len(templates):
+            t_title = f"{t_title} ({i // len(templates) + 1}-qism)"
+        slides.append({"title": t_title, "bullets": list(t_bullets)})
+    return slides
+
+
+def generate_slide_content_with_gemini(topic: str, slide_count: int, language: str) -> list[dict]:
+    if slide_count <= 0:
+        return []
+    if not client:
+        return _fallback_slides(topic, slide_count)
+
     prompt = f"""
-Siz professional taqdimot muallifisiz.
+Siz tajribali taqdimot tayyorlovchi mutaxassissiz.
 Mavzu: "{topic}"
 Til: {language}
-Slaydlar soni: {slide_count} ta (Titul va yakuniy slayd kirmaydi, jami {slide_count} ta kontent slaydi kerak).
+Kerakli kontent slaydlari soni: {slide_count} ta.
 
-Vazifa: Har bir slayd uchun chuqur, tahliliy va qiziqarli kontent yaratib berishingiz kerak.
-Format: Faqat valid JSON massiv (Array) qaytarishingiz kerak. Boshqa hech qanday izoh yoki matn qo'shmang.
-
-Har bir obyekt tuzilishi:
+Talablar:
+1. Har bir slayd aynan "{topic}" mavzusiga oid aniq, mazmunli va faktlarga boy bo'lsin.
+2. Har bir slayd uchun qisqa-lo'nda, tushunarli "title" va 3-4 ta "bullets" (har biri 1-2 gapdan oshmasin) yozing.
+3. Javobni faqat JSON massiv ko'rinishida qaytaring, boshqa matn yozmang:
 [
   {{
     "title": "Slayd sarlavhasi",
     "bullets": [
-      "Birinchi muhim tezis (batafsil)",
-      "Ikkinchi muhim tezis va amaliy misol",
-      "Uchinchi tahliliy xulosa yoki dalil",
-      "To'rtinchi yakunlovchi tezis"
+      "1-tezis",
+      "2-tezis",
+      "3-tezis",
+      "4-tezis"
     ]
   }}
 ]
@@ -338,71 +435,73 @@ Har bir obyekt tuzilishi:
             model="gemini-2.5-flash",
             contents=prompt,
         )
-        cleaned = response.text.strip()
-        if cleaned.startswith("```json"):
-            cleaned = cleaned.split("```json")[1].split("```")[0].strip()
-        elif cleaned.startswith("```"):
-            cleaned = cleaned.split("```")[1].split("```")[0].strip()
-
-        data = json.loads(cleaned)
-        if isinstance(data, list):
-            return data
+        raw_text = getattr(response, "text", "") or ""
+        slides = _extract_json_array(raw_text)
+        if len(slides) >= slide_count:
+            return slides[:slide_count]
+        if slides:
+            extra = _fallback_slides(topic, slide_count - len(slides))
+            return slides + extra
     except Exception as e:
         print(f"Gemini API Error: {e}")
 
-    return []
+    return _fallback_slides(topic, slide_count)
 
 
-# ================= FAYL YARATISH (MUKAMMAL) =================
+# ================= FAYL YARATISH =================
 def build_pptx(data: dict, out_path: str) -> None:
     prs = Presentation()
     prs.slide_width = Inches(13.333)
     prs.slide_height = Inches(7.5)
     blank = prs.slide_layouts[6]
 
-    d_idx = data.get("design_idx", 0)
+    d_idx = int(data.get("design_idx", 0))
+    if not (0 <= d_idx < len(DESIGNS)):
+        d_idx = 0
     _, bg_rgb, acc_rgb, txt_rgb, card_rgb = DESIGNS[d_idx]
     bg_color = RGBColor(*bg_rgb)
     acc_color = RGBColor(*acc_rgb)
     txt_color = RGBColor(*txt_rgb)
     card_color = RGBColor(*card_rgb)
 
-    total_slides = int(data["pages_or_slides"])
+    total_slides = max(2, int(data["pages_or_slides"]))
     topic = data["topic"]
-    author = data.get("author_title") or ""
-    ending = data.get("ending_style") or "Kerak emas"
+    author = (data.get("author_title") or "").strip()
+    ending = (data.get("ending_style") or "Kerak emas").strip()
     language = data.get("language", "O‘zbekcha")
+    has_ending = ending != "Kerak emas"
 
-    # AI Kontent olish
-    ai_slides = generate_slide_content_with_gemini(topic, total_slides - 2 if ending != "Kerak emas" else total_slides - 1, language)
+    content_count = total_slides - (2 if has_ending else 1)
+    ai_slides = generate_slide_content_with_gemini(topic, content_count, language)
 
     for s_num in range(1, total_slides + 1):
         slide = prs.slides.add_slide(blank)
-        bg = slide.background
-        fill = bg.fill
+        fill = slide.background.fill
         fill.solid()
         fill.fore_color.rgb = bg_color
 
-        # Teparoqdagi zamonaviy chiziq
-        bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), Inches(13.333), Inches(0.18))
-        bar.fill.solid()
-        bar.fill.fore_color.rgb = acc_color
-        bar.line.fill.background()
+        top_bar = slide.shapes.add_shape(
+            MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), Inches(13.333), Inches(0.18)
+        )
+        top_bar.fill.solid()
+        top_bar.fill.fore_color.rgb = acc_color
+        top_bar.line.fill.background()
 
         if s_num == 1:
-            # Titul Slaydi
-            card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(1.2), Inches(1.2), Inches(10.933), Inches(5.1))
+            card = slide.shapes.add_shape(
+                MSO_SHAPE.ROUNDED_RECTANGLE, Inches(1.1), Inches(1.1), Inches(11.133), Inches(5.3)
+            )
             card.fill.solid()
             card.fill.fore_color.rgb = card_color
             card.line.color.rgb = acc_color
 
-            tb = slide.shapes.add_textbox(Inches(1.6), Inches(1.8), Inches(10.133), Inches(3.8))
+            tb = slide.shapes.add_textbox(Inches(1.55), Inches(1.65), Inches(10.233), Inches(4.2))
             tf = tb.text_frame
             tf.word_wrap = True
 
             p1 = tf.paragraphs[0]
-            p1.text = topic
-            p1.font.size = Pt(40)
+            p1.text = topic[:140]
+            p1.font.size = Pt(38)
             p1.font.bold = True
             p1.font.color.rgb = txt_color
 
@@ -413,73 +512,67 @@ def build_pptx(data: dict, out_path: str) -> None:
 
             if author:
                 p3 = tf.add_paragraph()
-                p3.text = f"\nTayyorladi: {author}"
-                p3.font.size = Pt(22)
+                p3.text = f"\nTayyorladi: {author[:100]}"
+                p3.font.size = Pt(21)
                 p3.font.color.rgb = txt_color
 
-        elif s_num == total_slides and ending != "Kerak emas":
-            # Yakuniy Slayd
-            card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(1.5), Inches(1.8), Inches(10.333), Inches(4.0))
+        elif s_num == total_slides and has_ending:
+            card = slide.shapes.add_shape(
+                MSO_SHAPE.ROUNDED_RECTANGLE, Inches(1.4), Inches(1.7), Inches(10.533), Inches(4.1)
+            )
             card.fill.solid()
             card.fill.fore_color.rgb = card_color
             card.line.color.rgb = acc_color
 
-            tb = slide.shapes.add_textbox(Inches(1.8), Inches(2.4), Inches(9.733), Inches(2.8))
+            tb = slide.shapes.add_textbox(Inches(1.8), Inches(2.25), Inches(9.733), Inches(3.0))
             tf = tb.text_frame
             tf.word_wrap = True
             p = tf.paragraphs[0]
             p.text = f"E’tiboringiz uchun rahmat!\n\n{ending}"
-            p.font.size = Pt(38)
+            p.font.size = Pt(36)
             p.font.bold = True
             p.font.color.rgb = acc_color
 
         else:
-            # Kontent Slaydlari
             ai_idx = s_num - 2
-            curr_title = f"{s_num}-bo‘lim: {topic}"
-            bullets = [
-                f"«{topic}» mavzusining {s_num - 1}-yo‘nalishi bo‘yicha asosiy tezislar.",
-                "Amaliy misollar, tahliliy dalillar va xulosalar ketma-ketligi.",
-                "Mavzu yuzasidan shakllantirilgan asosiy xulosa.",
-            ]
+            slide_info = ai_slides[ai_idx] if ai_idx < len(ai_slides) else {
+                "title": f"{topic} — {s_num - 1}-bo‘lim",
+                "bullets": [f"«{topic}» mavzusining asosiy jihatlari."],
+            }
+            curr_title = slide_info["title"]
+            bullets = slide_info["bullets"]
 
-            if ai_slides and ai_idx < len(ai_slides):
-                curr_title = ai_slides[ai_idx].get("title", curr_title)
-                bullets = ai_slides[ai_idx].get("bullets", bullets)
-
-            # Sarlavha
-            tb_title = slide.shapes.add_textbox(Inches(0.8), Inches(0.45), Inches(11.7), Inches(0.9))
+            tb_title = slide.shapes.add_textbox(Inches(0.8), Inches(0.4), Inches(11.733), Inches(0.95))
             tf_t = tb_title.text_frame
             tf_t.word_wrap = True
             pt = tf_t.paragraphs[0]
-            pt.text = curr_title
-            pt.font.size = Pt(26)
+            pt.text = f"{s_num - 1}. {curr_title}"
+            pt.font.size = Pt(25)
             pt.font.bold = True
             pt.font.color.rgb = acc_color
 
-            # Kontent Kartochkasi (Fon)
-            card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.8), Inches(1.45), Inches(11.733), Inches(4.95))
+            card = slide.shapes.add_shape(
+                MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.8), Inches(1.45), Inches(11.733), Inches(5.05)
+            )
             card.fill.solid()
             card.fill.fore_color.rgb = card_color
             card.line.fill.background()
 
-            # Tezislar
-            tb_body = slide.shapes.add_textbox(Inches(1.1), Inches(1.65), Inches(11.133), Inches(4.5))
+            tb_body = slide.shapes.add_textbox(Inches(1.15), Inches(1.7), Inches(11.033), Inches(4.55))
             btf = tb_body.text_frame
             btf.word_wrap = True
 
             for idx_b, b_text in enumerate(bullets):
                 bp = btf.paragraphs[0] if idx_b == 0 else btf.add_paragraph()
-                bp.text = f"•  {b_text}"
-                bp.font.size = Pt(20)
+                bp.text = f"•  {b_text[:220]}"
+                bp.font.size = Pt(19)
                 bp.font.color.rgb = txt_color
-                bp.space_after = Pt(14)
+                bp.space_after = Pt(12)
 
-        # Footer (Slayd Raqami va Mavzu)
-        num_box = slide.shapes.add_textbox(Inches(0.8), Inches(6.85), Inches(11.7), Inches(0.45))
-        ntf = num_box.text_frame
+        footer_box = slide.shapes.add_textbox(Inches(0.8), Inches(6.85), Inches(11.733), Inches(0.45))
+        ntf = footer_box.text_frame
         np = ntf.paragraphs[0]
-        np.text = f"{topic}  |  {s_num} / {total_slides}"
+        np.text = f"{topic[:70]}  |  {s_num} / {total_slides}"
         np.font.size = Pt(12)
         np.font.color.rgb = txt_color
 
@@ -512,11 +605,9 @@ router = Router()
 WELCOME_TEXT = (
     "👋 Assalomu alaykum, {name}!\n\n"
     "Men mavzu bo‘yicha tayyor ish yozib beraman:\n\n"
-    "📊 Taqdimot — PPTX yoki PDF, Gemini AI bilan yaratiladi\n"
+    "📊 Taqdimot — PPTX, Gemini AI bilan yaratiladi\n"
     "📄 Referat va 📝 mustaqil ish — 5–15 bet\n"
     "📚 Kurs ishi — 20–40 bet, boblar bilan\n\n"
-    "Hujjatlar Word (DOCX) yoki PDF: titul varaq, mundarija va adabiyotlar bilan.\n"
-    "🎬 Animatsiyali yakun — taqdimotingiz oxiriga harakatlanuvchi «Rahmat!» slaydi\n"
     "🌐 Til: o‘zbek, rus, ingliz\n\n"
     "Kerakli bo‘limni pastdagi tugmalardan tanlang."
 )
@@ -774,21 +865,49 @@ async def cmd_addbal(message: Message, bot: Bot):
 async def admin_panel_msg(message: Message):
     if not is_admin(message.from_user.id):
         return
+    await message.answer(
+        "🛠 <b>Admin panel</b>\n\nQo‘lda balans berish: <code>/addbal USER_ID SUMMA</code>",
+        parse_mode="HTML",
+        reply_markup=admin_panel_kb(),
+    )
+
+
+@router.callback_query(F.data == "adm:pending")
+async def adm_show_pending(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Faqat admin uchun!", show_alert=True)
+        return
     pending = cur.execute(
         "SELECT id, user_id, claimed_amount, created_at FROM topup_requests WHERE status = 'pending' ORDER BY id DESC LIMIT 10"
     ).fetchall()
     if not pending:
-        await message.answer(
-            "Hozircha kutilayotgan to‘lov so‘rovlari yo‘q.\nQo‘lda balans berish: <code>/addbal USER_ID SUMMA</code>",
-            parse_mode="HTML",
-        )
+        await callback.message.answer("Hozircha kutilayotgan to‘lov so‘rovlari yo‘q.")
+    else:
+        for req_id, uid, amt, dt in pending:
+            await callback.message.answer(
+                f"⏳ So‘rov #{req_id} | User: <code>{uid}</code> | Summa: <b>{amt:,} so‘m</b> | {dt}".replace(",", " "),
+                parse_mode="HTML",
+                reply_markup=admin_topup_kb(req_id, uid),
+            )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "adm:stats")
+async def adm_show_stats(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Faqat admin uchun!", show_alert=True)
         return
-    for req_id, uid, amt, dt in pending:
-        await message.answer(
-            f"⏳ So‘rov #{req_id} | User: <code>{uid}</code> | Summa: <b>{amt:,} so‘m</b> | {dt}".replace(",", " "),
-            parse_mode="HTML",
-            reply_markup=admin_topup_kb(req_id, uid),
-        )
+    users_cnt = cur.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    works_cnt = cur.execute("SELECT COUNT(*) FROM works").fetchone()[0]
+    pending_cnt = cur.execute("SELECT COUNT(*) FROM topup_requests WHERE status = 'pending'").fetchone()[0]
+    text = (
+        "📊 <b>Bot statistikasi</b>\n\n"
+        f"👤 Foydalanuvchilar: <b>{users_cnt} ta</b>\n"
+        f"📁 Tayyorlangan ishlar: <b>{works_cnt} ta</b>\n"
+        f"⏳ Kutilayotgan to‘lovlar: <b>{pending_cnt} ta</b>"
+    )
+    await callback.message.answer(text, parse_mode="HTML")
+    await callback.answer()
 
 
 @router.message(F.text == "👥 Taklif qilish")
@@ -1029,7 +1148,10 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext):
         return
 
     await state.clear()
-    await callback.message.answer("⏳ Gemini AI mavzuni tahlil qilmoqda va slaydlar tayyorlamoqda...", reply_markup=main_menu_kb(uid))
+    await callback.message.answer(
+        "⏳ Gemini AI mavzuni tahlil qilmoqda va slaydlar tayyorlamoqda...",
+        reply_markup=main_menu_kb(uid),
+    )
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     wtype = data["work_type"]
@@ -1065,7 +1187,10 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext):
 
     await callback.message.answer_document(
         FSInputFile(file_path),
-        caption=f"✅ Tayyor! <b>{data['topic']}</b>\n💰 Balansdan yechildi: <b>{price:,} so‘m</b> (Qoldiq: <b>{get_balance(uid):,} so‘m</b>)".replace(",", " "),
+        caption=(
+            f"✅ Tayyor! <b>{data['topic']}</b>\n"
+            f"💰 Balansdan yechildi: <b>{price:,} so‘m</b> (Qoldiq: <b>{get_balance(uid):,} so‘m</b>)"
+        ).replace(",", " "),
         parse_mode="HTML",
     )
     await callback.answer()
