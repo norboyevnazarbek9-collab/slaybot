@@ -29,7 +29,7 @@ from pptx.util import Inches, Pt
 
 # ================= SOZLAMALAR =================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8970242504:AAFLoAU8mjzbtqUNJlB8-JPw0OeL9x4OIgI").strip()
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyB7y2cO1ACj-b66YmxIlkuRGQl7-n7Gi9o").strip()
 
 ADMIN_IDS = [
     int(x) for x in os.getenv("ADMIN_IDS", "8052376816").split(",") if x.strip().isdigit()
