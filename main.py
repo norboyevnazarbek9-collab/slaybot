@@ -27,7 +27,7 @@ from pptx.util import Inches, Pt
 # ================= SOZLAMALAR =================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8970242504:AAFLoAU8mjzbtqUNJlB8-JPw0OeL9x4OIgI").strip()
 ADMIN_IDS = [
-    int(x) for x in os.getenv("8052376816", "").split(",") if x.strip().isdigit()
+    int(x) for x in os.getenv("ADMIN_IDS", "8052376816").split(",") if x.strip().isdigit()
 ]
 CARD_NUMBER = os.getenv("CARD_NUMBER", "4073 4200 7949 1878").strip()
 CARD_OWNER = os.getenv("CARD_OWNER", "NAZARBEK NORBOYEV .").strip()
