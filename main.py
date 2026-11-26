@@ -4,6 +4,7 @@ import sqlite3
 from datetime import datetime
 from typing import Optional
 
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
@@ -24,11 +25,13 @@ from pptx.dml.color import RGBColor
 from pptx.util import Inches, Pt
 
 # ================= SOZLAMALAR =================
-BOT_TOKEN = os.getenv("BOT_TOKEN", "9220906070:AAFq_pHmFonr8lJh1V73_pQwaxnKuoOOSCQ")
-ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "8052376816").split(",") if x.strip().isdigit()]
-CARD_NUMBER = os.getenv("CARD_NUMBER", "4073 4200 7949 1878")
-CARD_OWNER = os.getenv("CARD_OWNER", "NAZARBEK NORBOYEV.")
-PRICE_PER_SLIDE = 350  # 1 slayd = 350 so'm
+BOT_TOKEN = os.getenv("9220906070:AAGRtWSZdZkv3bf05pFl4bfsxm_NUGYMHiM", "").strip()
+ADMIN_IDS = [
+    int(x) for x in os.getenv("8052376816", "").split(",") if x.strip().isdigit()
+]
+CARD_NUMBER = os.getenv("CARD_NUMBER", "4073 4200 7949 1878").strip()
+CARD_OWNER = os.getenv("CARD_OWNER", "NAZARBEK NORBOYEV .").strip()
+PRICE_PER_SLIDE = int(os.getenv("PRICE_PER_SLIDE", "350"))
 
 DB_PATH = "slayd_bot_manual_topup.db"
 OUT_DIR = "generated_files"
@@ -81,8 +84,16 @@ CREATE TABLE IF NOT EXISTS topup_requests (
 conn.commit()
 
 
-def ensure_user(user_id: int, full_name: str, username: Optional[str], referrer_id: Optional[int] = None) -> dict:
-    row = cur.execute("SELECT user_id, full_name, username, balance, referrer_id, joined_at FROM users WHERE user_id = ?", (user_id,)).fetchone()
+def ensure_user(
+    user_id: int,
+    full_name: str,
+    username: Optional[str],
+    referrer_id: Optional[int] = None,
+) -> dict:
+    row = cur.execute(
+        "SELECT user_id, full_name, username, balance, referrer_id, joined_at FROM users WHERE user_id = ?",
+        (user_id,),
+    ).fetchone()
     if not row:
         valid_ref = referrer_id if (referrer_id and referrer_id != user_id) else None
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -91,7 +102,10 @@ def ensure_user(user_id: int, full_name: str, username: Optional[str], referrer_
             (user_id, full_name or "Foydalanuvchi", username or "", valid_ref, now),
         )
         conn.commit()
-        row = cur.execute("SELECT user_id, full_name, username, balance, referrer_id, joined_at FROM users WHERE user_id = ?", (user_id,)).fetchone()
+        row = cur.execute(
+            "SELECT user_id, full_name, username, balance, referrer_id, joined_at FROM users WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
     return {
         "user_id": row[0],
         "full_name": row[1],
@@ -109,7 +123,10 @@ def get_balance(user_id: int) -> int:
 
 def add_balance(user_id: int, amount: int) -> int:
     ensure_user(user_id, "Foydalanuvchi", "")
-    cur.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
+    cur.execute(
+        "UPDATE users SET balance = balance + ? WHERE user_id = ?",
+        (amount, user_id),
+    )
     conn.commit()
     return get_balance(user_id)
 
@@ -118,7 +135,10 @@ def deduct_balance(user_id: int, amount: int) -> bool:
     bal = get_balance(user_id)
     if bal < amount:
         return False
-    cur.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (amount, user_id))
+    cur.execute(
+        "UPDATE users SET balance = balance - ? WHERE user_id = ?",
+        (amount, user_id),
+    )
     conn.commit()
     return True
 
@@ -141,7 +161,10 @@ def main_menu_kb(user_id: int) -> ReplyKeyboardMarkup:
 
 
 def back_kb() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="⬅️ Orqaga")]], resize_keyboard=True)
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="⬅️ Orqaga")]],
+        resize_keyboard=True,
+    )
 
 
 def balance_inline_kb() -> InlineKeyboardMarkup:
@@ -226,7 +249,14 @@ def images_kb() -> InlineKeyboardMarkup:
     )
 
 
-ENDINGS = ["1. 🎉 Konfetti", "2. 🎆 Mushakbozlik", "3. 🎈 Sharlar", "4. ✨ Yulduzlar", "5. 💖 Yuraklar", "6. 🫧 Pufakchalar"]
+ENDINGS = [
+    "1. 🎉 Konfetti",
+    "2. 🎆 Mushakbozlik",
+    "3. 🎈 Sharlar",
+    "4. ✨ Yulduzlar",
+    "5. 💖 Yuraklar",
+    "6. 🫧 Pufakchalar",
+]
 
 
 def ending_kb() -> InlineKeyboardMarkup:
@@ -370,9 +400,13 @@ def build_docx(data: dict, out_path: str) -> None:
     if data.get("author_title"):
         doc.add_paragraph(f"Muallif: {data['author_title']}")
     doc.add_heading("Kirish", level=1)
-    doc.add_paragraph(f"Ushbu ish «{data['topic']}» mavzusining nazariy va amaliy jihatlarini yoritadi.")
+    doc.add_paragraph(
+        f"Ushbu ish «{data['topic']}» mavzusining nazariy va amaliy jihatlarini yoritadi."
+    )
     doc.add_heading("Asosiy qism", level=1)
-    doc.add_paragraph(f"«{data['topic']}» bo‘yicha tahlil, asosiy tushunchalar va amaliy tavsiyalar keltirilgan.")
+    doc.add_paragraph(
+        f"«{data['topic']}» bo‘yicha tahlil, asosiy tushunchalar va amaliy tavsiyalar keltirilgan."
+    )
     doc.add_heading("Xulosa va adabiyotlar", level=1)
     doc.add_paragraph("Mavzu yuzasidan umumiy xulosalar shakllantirildi.")
     doc.save(out_path)
@@ -455,9 +489,18 @@ async def topup_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(Flow.waiting_topup_amount)
 async def topup_receive_amount(message: Message, state: FSMContext, bot: Bot):
-    cleaned = (message.text or "").replace(" ", "").replace("so‘m", "").replace("so'm", "").strip()
+    cleaned = (
+        (message.text or "")
+        .replace(" ", "")
+        .replace("so‘m", "")
+        .replace("so'm", "")
+        .strip()
+    )
     if not cleaned.isdigit() or int(cleaned) <= 0:
-        await message.answer("Iltimos, musbat summa kiriting (masalan: <code>10000</code>).", parse_mode="HTML")
+        await message.answer(
+            "Iltimos, musbat summa kiriting (masalan: <code>10000</code>).",
+            parse_mode="HTML",
+        )
         return
 
     amount = int(cleaned)
@@ -514,7 +557,8 @@ async def admin_quick_add(callback: CallbackQuery, bot: Bot):
     conn.commit()
 
     await callback.message.edit_text(
-        callback.message.text + f"\n\n✅ <b>+{amt:,} so‘m qo‘lda qo‘shildi</b> (Yangi balans: {new_bal:,} so‘m)".replace(",", " "),
+        callback.message.text
+        + f"\n\n✅ <b>+{amt:,} so‘m qo‘lda qo‘shildi</b> (Yangi balans: {new_bal:,} so‘m)".replace(",", " "),
         parse_mode="HTML",
     )
     try:
@@ -591,10 +635,16 @@ async def admin_reject_topup(callback: CallbackQuery, bot: Bot):
 
     _, req_id_s, uid_s = callback.data.split(":")
     req_id, uid = int(req_id_s), int(uid_s)
-    cur.execute("UPDATE topup_requests SET status = 'rejected', admin_id = ? WHERE id = ?", (callback.from_user.id, req_id))
+    cur.execute(
+        "UPDATE topup_requests SET status = 'rejected', admin_id = ? WHERE id = ?",
+        (callback.from_user.id, req_id),
+    )
     conn.commit()
 
-    await callback.message.edit_text(callback.message.text + "\n\n❌ <b>Rad etildi</b>", parse_mode="HTML")
+    await callback.message.edit_text(
+        callback.message.text + "\n\n❌ <b>Rad etildi</b>",
+        parse_mode="HTML",
+    )
     try:
         await bot.send_message(uid, "❌ Balans to‘ldirish so‘rovingiz rad etildi. Qayta urinib ko‘ring.")
     except Exception:
@@ -617,7 +667,11 @@ async def cmd_addbal(message: Message, bot: Bot):
         parse_mode="HTML",
     )
     try:
-        await bot.send_message(uid, f"✅ Balansingizga <b>+{amt:,} so‘m</b> qo‘shildi! Joriy balans: <b>{new_bal:,} so‘m</b>".replace(",", " "), parse_mode="HTML")
+        await bot.send_message(
+            uid,
+            f"✅ Balansingizga <b>+{amt:,} so‘m</b> qo‘shildi! Joriy balans: <b>{new_bal:,} so‘m</b>".replace(",", " "),
+            parse_mode="HTML",
+        )
     except Exception:
         pass
 
@@ -626,9 +680,14 @@ async def cmd_addbal(message: Message, bot: Bot):
 async def admin_panel_msg(message: Message):
     if not is_admin(message.from_user.id):
         return
-    pending = cur.execute("SELECT id, user_id, claimed_amount, created_at FROM topup_requests WHERE status = 'pending' ORDER BY id DESC LIMIT 10").fetchall()
+    pending = cur.execute(
+        "SELECT id, user_id, claimed_amount, created_at FROM topup_requests WHERE status = 'pending' ORDER BY id DESC LIMIT 10"
+    ).fetchall()
     if not pending:
-        await message.answer("Hozircha kutilayotgan to‘lov so‘rovlari yo‘q.\nQo‘lda balans berish: <code>/addbal USER_ID SUMMA</code>", parse_mode="HTML")
+        await message.answer(
+            "Hozircha kutilayotgan to‘lov so‘rovlari yo‘q.\nQo‘lda balans berish: <code>/addbal USER_ID SUMMA</code>",
+            parse_mode="HTML",
+        )
         return
     for req_id, uid, amt, dt in pending:
         await message.answer(
@@ -642,7 +701,10 @@ async def admin_panel_msg(message: Message):
 async def invite_friends(message: Message, bot: Bot):
     me = await bot.get_me()
     link = f"https://t.me/{me.username}?start=ref_{message.from_user.id}"
-    cnt = cur.execute("SELECT COUNT(*) FROM users WHERE referrer_id = ?", (message.from_user.id,)).fetchone()[0]
+    cnt = cur.execute(
+        "SELECT COUNT(*) FROM users WHERE referrer_id = ?",
+        (message.from_user.id,),
+    ).fetchone()[0]
     await message.answer(
         f"👥 <b>Do‘stlarni taklif qilish</b>\n\n"
         f"Sizning havolangiz:\n<code>{link}</code>\n\n"
@@ -653,7 +715,10 @@ async def invite_friends(message: Message, bot: Bot):
 
 @router.message(F.text == "📁 Ishlarim")
 async def my_works(message: Message):
-    rows = cur.execute("SELECT id, work_type, title, pages_or_slides, created_at FROM works WHERE user_id = ? ORDER BY id DESC LIMIT 10", (message.from_user.id,)).fetchall()
+    rows = cur.execute(
+        "SELECT id, work_type, title, pages_or_slides, created_at FROM works WHERE user_id = ? ORDER BY id DESC LIMIT 10",
+        (message.from_user.id,),
+    ).fetchall()
     if not rows:
         await message.answer("📁 Sizda hali tayyorlangan ishlar yo‘q.")
         return
@@ -706,7 +771,14 @@ async def receive_topic(message: Message, state: FSMContext):
     else:
         pages = 10 if wtype in ("📄 Referat", "📝 Mustaqil ish") else 25
         price = pages * 500
-        await state.update_data(pages_or_slides=pages, price=price, design_idx=0, has_images=0, ending_style="Kerak emas", author_title="")
+        await state.update_data(
+            pages_or_slides=pages,
+            price=price,
+            design_idx=0,
+            has_images=0,
+            ending_style="Kerak emas",
+            author_title="",
+        )
         await state.set_state(Flow.waiting_author)
         await message.answer(
             "✍️ <b>Titul uchun ism-familiyangizni yozing</b>\n<i>(Kerak bo‘lmasa «O‘tkazib yuborish» tugmasini bosing)</i>",
@@ -915,12 +987,12 @@ async def flow_cancel_or_back(callback: CallbackQuery, state: FSMContext):
         await callback.message.answer("❌ Jarayon bekor qilindi.", reply_markup=main_menu_kb(callback.from_user.id))
     await callback.answer()
 
-from aiohttp import web
 
-
+# ================= RENDER WEB SERVER + BOT =================
 async def start_health_server():
     app = web.Application()
-    app.router.add_get("/", lambda request: web.Response(text="Bot is running"))
+    app.router.add_get("/", lambda request: web.Response(text="Slayd Bot is running"))
+    app.router.add_get("/health", lambda request: web.Response(text="OK"))
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.environ.get("PORT", 10000))
@@ -929,6 +1001,8 @@ async def start_health_server():
 
 
 async def main():
+    if not BOT_TOKEN:
+        raise RuntimeError("BOT_TOKEN environment variable is missing!")
     await start_health_server()
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
@@ -936,7 +1010,5 @@ async def main():
     await dp.start_polling(bot)
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
 if __name__ == "__main__":
     asyncio.run(main())
