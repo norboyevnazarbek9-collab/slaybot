@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import sqlite3
 from datetime import datetime
@@ -20,12 +21,16 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 from docx import Document
+from google import genai
 from pptx import Presentation
+from pptx.enum.shapes import MSO_SHAPE
 from pptx.dml.color import RGBColor
 from pptx.util import Inches, Pt
 
 # ================= SOZLAMALAR =================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8970242504:AAFLoAU8mjzbtqUNJlB8-JPw0OeL9x4OIgI").strip()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+
 ADMIN_IDS = [
     int(x) for x in os.getenv("ADMIN_IDS", "8052376816").split(",") if x.strip().isdigit()
 ]
@@ -36,6 +41,9 @@ PRICE_PER_SLIDE = int(os.getenv("PRICE_PER_SLIDE", "350"))
 DB_PATH = "slayd_bot_manual_topup.db"
 OUT_DIR = "generated_files"
 os.makedirs(OUT_DIR, exist_ok=True)
+
+# Gemini Klienti
+client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 # ================= BAZA (SQLite) =================
 conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -215,13 +223,13 @@ def slide_count_kb() -> InlineKeyboardMarkup:
 
 
 DESIGNS = [
-    ("1. 💎 Klassik", (15, 23, 42), (37, 99, 235), (248, 250, 252)),
-    ("2. 🌊 Okean", (8, 47, 73), (14, 165, 233), (240, 249, 255)),
-    ("3. 🌅 Shafaq", (67, 20, 7), (234, 88, 12), (255, 247, 237)),
-    ("4. 🌿 Tabiat", (20, 83, 45), (22, 163, 74), (240, 253, 244)),
-    ("5. 🌙 Tungi", (9, 13, 22), (250, 204, 21), (241, 245, 249)),
-    ("6. 👑 Shohona", (49, 24, 98), (234, 179, 8), (250, 245, 255)),
-    ("7. ⚪ Minimal", (255, 255, 255), (30, 41, 59), (15, 23, 42)),
+    ("1. 💎 Klassik", (15, 23, 42), (37, 99, 235), (248, 250, 252), (30, 41, 59)),
+    ("2. 🌊 Okean", (8, 47, 73), (14, 165, 233), (240, 249, 255), (15, 23, 42)),
+    ("3. 🌅 Shafaq", (67, 20, 7), (234, 88, 12), (255, 247, 237), (45, 15, 5)),
+    ("4. 🌿 Tabiat", (20, 83, 45), (22, 163, 74), (240, 253, 244), (10, 50, 25)),
+    ("5. 🌙 Tungi", (9, 13, 22), (250, 204, 21), (241, 245, 249), (24, 32, 47)),
+    ("6. 👑 Shohona", (49, 24, 98), (234, 179, 8), (250, 245, 255), (35, 15, 70)),
+    ("7. ⚪ Minimal", (245, 247, 250), (30, 41, 59), (15, 23, 42), (255, 255, 255)),
 ]
 
 
@@ -298,7 +306,54 @@ class Flow(StatesGroup):
     waiting_admin_custom_amount = State()
 
 
-# ================= FAYL YARATISH =================
+# ================= GEMINI AI GENERATSIYASI =================
+def generate_slide_content_with_gemini(topic: str, slide_count: int, language: str) -> list[dict]:
+    if not client:
+        return []
+
+    prompt = f"""
+Siz professional taqdimot muallifisiz.
+Mavzu: "{topic}"
+Til: {language}
+Slaydlar soni: {slide_count} ta (Titul va yakuniy slayd kirmaydi, jami {slide_count} ta kontent slaydi kerak).
+
+Vazifa: Har bir slayd uchun chuqur, tahliliy va qiziqarli kontent yaratib berishingiz kerak.
+Format: Faqat valid JSON massiv (Array) qaytarishingiz kerak. Boshqa hech qanday izoh yoki matn qo'shmang.
+
+Har bir obyekt tuzilishi:
+[
+  {{
+    "title": "Slayd sarlavhasi",
+    "bullets": [
+      "Birinchi muhim tezis (batafsil)",
+      "Ikkinchi muhim tezis va amaliy misol",
+      "Uchinchi tahliliy xulosa yoki dalil",
+      "To'rtinchi yakunlovchi tezis"
+    ]
+  }}
+]
+"""
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+        )
+        cleaned = response.text.strip()
+        if cleaned.startswith("```json"):
+            cleaned = cleaned.split("```json")[1].split("```")[0].strip()
+        elif cleaned.startswith("```"):
+            cleaned = cleaned.split("```")[1].split("```")[0].strip()
+
+        data = json.loads(cleaned)
+        if isinstance(data, list):
+            return data
+    except Exception as e:
+        print(f"Gemini API Error: {e}")
+
+    return []
+
+
+# ================= FAYL YARATISH (MUKAMMAL) =================
 def build_pptx(data: dict, out_path: str) -> None:
     prs = Presentation()
     prs.slide_width = Inches(13.333)
@@ -306,15 +361,20 @@ def build_pptx(data: dict, out_path: str) -> None:
     blank = prs.slide_layouts[6]
 
     d_idx = data.get("design_idx", 0)
-    _, bg_rgb, acc_rgb, txt_rgb = DESIGNS[d_idx]
+    _, bg_rgb, acc_rgb, txt_rgb, card_rgb = DESIGNS[d_idx]
     bg_color = RGBColor(*bg_rgb)
     acc_color = RGBColor(*acc_rgb)
     txt_color = RGBColor(*txt_rgb)
+    card_color = RGBColor(*card_rgb)
 
     total_slides = int(data["pages_or_slides"])
     topic = data["topic"]
     author = data.get("author_title") or ""
     ending = data.get("ending_style") or "Kerak emas"
+    language = data.get("language", "O‘zbekcha")
+
+    # AI Kontent olish
+    ai_slides = generate_slide_content_with_gemini(topic, total_slides - 2 if ending != "Kerak emas" else total_slides - 1, language)
 
     for s_num in range(1, total_slides + 1):
         slide = prs.slides.add_slide(blank)
@@ -323,23 +383,31 @@ def build_pptx(data: dict, out_path: str) -> None:
         fill.solid()
         fill.fore_color.rgb = bg_color
 
-        bar = slide.shapes.add_shape(1, Inches(0), Inches(0), Inches(13.333), Inches(0.22))
+        # Teparoqdagi zamonaviy chiziq
+        bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), Inches(13.333), Inches(0.18))
         bar.fill.solid()
         bar.fill.fore_color.rgb = acc_color
         bar.line.fill.background()
 
         if s_num == 1:
-            tb = slide.shapes.add_textbox(Inches(1.1), Inches(1.8), Inches(11.1), Inches(3.6))
+            # Titul Slaydi
+            card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(1.2), Inches(1.2), Inches(10.933), Inches(5.1))
+            card.fill.solid()
+            card.fill.fore_color.rgb = card_color
+            card.line.color.rgb = acc_color
+
+            tb = slide.shapes.add_textbox(Inches(1.6), Inches(1.8), Inches(10.133), Inches(3.8))
             tf = tb.text_frame
             tf.word_wrap = True
+
             p1 = tf.paragraphs[0]
             p1.text = topic
-            p1.font.size = Pt(42)
+            p1.font.size = Pt(40)
             p1.font.bold = True
             p1.font.color.rgb = txt_color
 
             p2 = tf.add_paragraph()
-            p2.text = f"\nTil: {data['language']}  |  Slaydlar: {total_slides} ta"
+            p2.text = f"\nTil: {language}  |  Slaydlar: {total_slides} ta"
             p2.font.size = Pt(20)
             p2.font.color.rgb = acc_color
 
@@ -348,45 +416,71 @@ def build_pptx(data: dict, out_path: str) -> None:
                 p3.text = f"\nTayyorladi: {author}"
                 p3.font.size = Pt(22)
                 p3.font.color.rgb = txt_color
+
         elif s_num == total_slides and ending != "Kerak emas":
-            tb = slide.shapes.add_textbox(Inches(1.2), Inches(2.2), Inches(10.9), Inches(3.0))
+            # Yakuniy Slayd
+            card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(1.5), Inches(1.8), Inches(10.333), Inches(4.0))
+            card.fill.solid()
+            card.fill.fore_color.rgb = card_color
+            card.line.color.rgb = acc_color
+
+            tb = slide.shapes.add_textbox(Inches(1.8), Inches(2.4), Inches(9.733), Inches(2.8))
             tf = tb.text_frame
             tf.word_wrap = True
             p = tf.paragraphs[0]
-            p.text = f"E’tiboringiz uchun rahmat!\n{ending}"
-            p.font.size = Pt(40)
+            p.text = f"E’tiboringiz uchun rahmat!\n\n{ending}"
+            p.font.size = Pt(38)
             p.font.bold = True
             p.font.color.rgb = acc_color
-        else:
-            tb = slide.shapes.add_textbox(Inches(0.9), Inches(0.6), Inches(11.5), Inches(1.0))
-            tf = tb.text_frame
-            tf.word_wrap = True
-            p_title = tf.paragraphs[0]
-            p_title.text = f"{s_num}-slayd: {topic} — {s_num - 1}-bo‘lim"
-            p_title.font.size = Pt(28)
-            p_title.font.bold = True
-            p_title.font.color.rgb = acc_color
 
-            body_box = slide.shapes.add_textbox(Inches(0.9), Inches(1.8), Inches(11.2), Inches(4.5))
-            btf = body_box.text_frame
-            btf.word_wrap = True
+        else:
+            # Kontent Slaydlari
+            ai_idx = s_num - 2
+            curr_title = f"{s_num}-bo‘lim: {topic}"
             bullets = [
                 f"«{topic}» mavzusining {s_num - 1}-yo‘nalishi bo‘yicha asosiy tezislar.",
                 "Amaliy misollar, tahliliy dalillar va xulosalar ketma-ketligi.",
-                f"Vizual bezak: {'Rasmli blok' if data.get('has_images') else 'Matnli blok'}.",
+                "Mavzu yuzasidan shakllantirilgan asosiy xulosa.",
             ]
+
+            if ai_slides and ai_idx < len(ai_slides):
+                curr_title = ai_slides[ai_idx].get("title", curr_title)
+                bullets = ai_slides[ai_idx].get("bullets", bullets)
+
+            # Sarlavha
+            tb_title = slide.shapes.add_textbox(Inches(0.8), Inches(0.45), Inches(11.7), Inches(0.9))
+            tf_t = tb_title.text_frame
+            tf_t.word_wrap = True
+            pt = tf_t.paragraphs[0]
+            pt.text = curr_title
+            pt.font.size = Pt(26)
+            pt.font.bold = True
+            pt.font.color.rgb = acc_color
+
+            # Kontent Kartochkasi (Fon)
+            card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.8), Inches(1.45), Inches(11.733), Inches(4.95))
+            card.fill.solid()
+            card.fill.fore_color.rgb = card_color
+            card.line.fill.background()
+
+            # Tezislar
+            tb_body = slide.shapes.add_textbox(Inches(1.1), Inches(1.65), Inches(11.133), Inches(4.5))
+            btf = tb_body.text_frame
+            btf.word_wrap = True
+
             for idx_b, b_text in enumerate(bullets):
                 bp = btf.paragraphs[0] if idx_b == 0 else btf.add_paragraph()
-                bp.text = f"• {b_text}"
-                bp.font.size = Pt(22)
+                bp.text = f"•  {b_text}"
+                bp.font.size = Pt(20)
                 bp.font.color.rgb = txt_color
                 bp.space_after = Pt(14)
 
-        num_box = slide.shapes.add_textbox(Inches(11.8), Inches(6.85), Inches(1.2), Inches(0.45))
+        # Footer (Slayd Raqami va Mavzu)
+        num_box = slide.shapes.add_textbox(Inches(0.8), Inches(6.85), Inches(11.7), Inches(0.45))
         ntf = num_box.text_frame
         np = ntf.paragraphs[0]
-        np.text = f"{s_num} / {total_slides}"
-        np.font.size = Pt(14)
+        np.text = f"{topic}  |  {s_num} / {total_slides}"
+        np.font.size = Pt(12)
         np.font.color.rgb = txt_color
 
     prs.save(out_path)
@@ -418,7 +512,7 @@ router = Router()
 WELCOME_TEXT = (
     "👋 Assalomu alaykum, {name}!\n\n"
     "Men mavzu bo‘yicha tayyor ish yozib beraman:\n\n"
-    "📊 Taqdimot — PPTX yoki PDF, 7 xil dizayn\n"
+    "📊 Taqdimot — PPTX yoki PDF, Gemini AI bilan yaratiladi\n"
     "📄 Referat va 📝 mustaqil ish — 5–15 bet\n"
     "📚 Kurs ishi — 20–40 bet, boblar bilan\n\n"
     "Hujjatlar Word (DOCX) yoki PDF: titul varaq, mundarija va adabiyotlar bilan.\n"
@@ -935,17 +1029,17 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext):
         return
 
     await state.clear()
-    await callback.message.answer("⏳ Fayl tayyorlanmoqda, biroz kuting...", reply_markup=main_menu_kb(uid))
+    await callback.message.answer("⏳ Gemini AI mavzuni tahlil qilmoqda va slaydlar tayyorlamoqda...", reply_markup=main_menu_kb(uid))
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     wtype = data["work_type"]
 
     if wtype == "📊 Taqdimot yaratish":
         file_path = os.path.join(OUT_DIR, f"taqdimot_{uid}_{ts}.pptx")
-        build_pptx(data, file_path)
+        await asyncio.to_thread(build_pptx, data, file_path)
     else:
         file_path = os.path.join(OUT_DIR, f"hujjat_{uid}_{ts}.docx")
-        build_docx(data, file_path)
+        await asyncio.to_thread(build_docx, data, file_path)
 
     cur.execute(
         """
