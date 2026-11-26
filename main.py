@@ -25,7 +25,7 @@ from pptx.dml.color import RGBColor
 from pptx.util import Inches, Pt
 
 # ================= SOZLAMALAR =================
-BOT_TOKEN = os.getenv("9220906070:AAG-LiLIqMb60PkHGsaxZrBSfhG2R6v5gUY", "").strip()
+BOT_TOKEN = os.getenv("8970242504:AAFLoAU8mjzbtqUNJlB8-JPw0OeL9x4OIgI", "").strip()
 ADMIN_IDS = [
     int(x) for x in os.getenv("8052376816", "").split(",") if x.strip().isdigit()
 ]
