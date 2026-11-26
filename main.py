@@ -43,6 +43,7 @@ DB_PATH = "slayd_bot_manual_topup.db"
 OUT_DIR = "generated_files"
 os.makedirs(OUT_DIR, exist_ok=True)
 
+# Gemini AI Klienti
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 # ================= BAZA (SQLite) =================
@@ -315,7 +316,7 @@ class Flow(StatesGroup):
     waiting_admin_custom_amount = State()
 
 
-# ================= GEMINI AI & KONTENT =================
+# ================= GEMINI AI GENERATSIYASI =================
 def _extract_json_array(raw_text: str) -> list[dict]:
     if not raw_text:
         return []
@@ -327,125 +328,68 @@ def _extract_json_array(raw_text: str) -> list[dict]:
     if match:
         cleaned = match.group(0)
 
-    parsed = json.loads(cleaned)
-    if not isinstance(parsed, list):
-        return []
-
-    result = []
-    for item in parsed:
-        if isinstance(item, dict):
-            title = str(item.get("title", "")).strip()
-            bullets = item.get("bullets", [])
-            if isinstance(bullets, list):
-                clean_bullets = [str(b).strip() for b in bullets if str(b).strip()][:4]
-            else:
-                clean_bullets = []
-            if title and clean_bullets:
-                result.append({"title": title[:110], "bullets": clean_bullets})
-    return result
-
-
-def _fallback_slides(topic: str, count: int) -> list[dict]:
-    templates = [
-        (
-            f"{topic}: Kirish va umumiy tushuncha",
-            [
-                f"«{topic}» mavzusining dolzarbligi va asosiy mohiyati.",
-                "Tushunchaning shakllanish tarixi hamda asosiy xususiyatlari.",
-                "Soha rivojidagi o‘rni va bugungi kundagi ahamiyati.",
-                "Mavzuni chuqur o‘rganishning asosiy yo‘nalishlari.",
-            ],
-        ),
-        (
-            f"{topic}: Asosiy bosqichlar va tamoyillar",
-            [
-                "Jarayonning bosqichma-bosqich rivojlanish ketma-ketligi.",
-                "Asosiy qonuniyatlar, mezonlar va ishlash prinsiplari.",
-                "Tizimli yondashuv orqali natijadorlikni oshirish usullari.",
-                "Boshqa sohalar bilan o‘zaro bog‘liqligi.",
-            ],
-        ),
-        (
-            f"{topic}: Amaliy qo‘llanilishi va misollar",
-            [
-                "Kundalik hayot va amaliyotda qo‘llanishining asosiy holatlari.",
-                "Samarali yechimlar orqali erishiladigan amaliy natijalar.",
-                "Zamonaviy texnologiyalar va metodlarning uyg‘unligi.",
-                "Tajriba va amaliy kuzatishlardan olingan saboqlar.",
-            ],
-        ),
-        (
-            f"{topic}: Dolzarb muammolar va yechimlar",
-            [
-                "Sohada uchraydigan asosiy muammolar va cheklovlar tahlili.",
-                "Ushbu muammolarning yuzaga kelish sabablari.",
-                "Ularni bartaraf etish bo‘yicha amaliy taklif va chora-tadbirlar.",
-                "Barqaror rivojlanish uchun ustuvor vazifalar.",
-            ],
-        ),
-        (
-            f"{topic}: Yakuniy xulosalar",
-            [
-                f"«{topic}» bo‘yicha asosiy nazariy va amaliy xulosalar.",
-                "Kelajakdagi rivojlanish istiqbollari va yangi imkoniyatlar.",
-                "Tavsiya etiladigan asosiy yo‘nalishlar.",
-                "Mavzu yuzasidan umumiy yakuniy fikr.",
-            ],
-        ),
-    ]
-    slides = []
-    for i in range(max(0, count)):
-        t_title, t_bullets = templates[i % len(templates)]
-        if i >= len(templates):
-            t_title = f"{t_title} ({i // len(templates) + 1}-qism)"
-        slides.append({"title": t_title, "bullets": list(t_bullets)})
-    return slides
+    try:
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, list):
+            result = []
+            for item in parsed:
+                if isinstance(item, dict):
+                    title = str(item.get("title", "")).strip()
+                    bullets = item.get("bullets", [])
+                    if isinstance(bullets, list):
+                        clean_bullets = [str(b).strip() for b in bullets if str(b).strip()][:4]
+                    else:
+                        clean_bullets = []
+                    if title and clean_bullets:
+                        result.append({"title": title[:110], "bullets": clean_bullets})
+            return result
+    except Exception:
+        pass
+    return []
 
 
 def generate_slide_content_with_gemini(topic: str, slide_count: int, language: str) -> list[dict]:
     if slide_count <= 0:
         return []
     if not client:
-        return _fallback_slides(topic, slide_count)
+        print("Gemini Client o'rnatilmagan (GEMINI_API_KEY yo'q).")
+        return []
 
     prompt = f"""
-Siz tajribali taqdimot tayyorlovchi mutaxassissiz.
+Siz professional taqdimot tayyorlovchi ekspertsiz.
 Mavzu: "{topic}"
 Til: {language}
-Kerakli kontent slaydlari soni: {slide_count} ta.
+Slaydlar soni: {slide_count} ta kontent slaydi.
 
 Talablar:
-1. Har bir slayd aynan "{topic}" mavzusiga oid aniq, mazmunli va faktlarga boy bo'lsin.
-2. Har bir slayd uchun qisqa-lo'nda, tushunarli "title" va 3-4 ta "bullets" (har biri 1-2 gapdan oshmasin) yozing.
-3. Javobni faqat JSON massiv ko'rinishida qaytaring, boshqa matn yozmang:
+1. Har bir slayd to'liq "{topic}" mavzusiga mos bo'lsin.
+2. Har bir slayd uchun chuqur, tahliliy va mazmunli sarlavha ("title") hamda 3-4 ta batafsil tezis ("bullets") yozing.
+3. Umumiy yoki shablon gaplar yozmang. Aniq sanalar, shaxslar, hodisalar va amaliy faktlarni kiriting.
+4. Javobni faqat toza JSON massiv ko'rinishida qaytaring:
 [
   {{
     "title": "Slayd sarlavhasi",
     "bullets": [
-      "1-tezis",
-      "2-tezis",
-      "3-tezis",
-      "4-tezis"
+      "Birinchi tahliliy va mazmunli tezis",
+      "Ikkinchi amaliy va faktlarga boy tezis",
+      "Uchinchi muhim ko'rsatkich yoki xulosa"
     ]
   }}
 ]
 """
     try:
         response = client.models.generate_content(
-          model="gemini-3.8-flash",
+            model="gemini-3.8-flash",
             contents=prompt,
         )
         raw_text = getattr(response, "text", "") or ""
         slides = _extract_json_array(raw_text)
-        if len(slides) >= slide_count:
-            return slides[:slide_count]
         if slides:
-            extra = _fallback_slides(topic, slide_count - len(slides))
-            return slides + extra
+            return slides[:slide_count]
     except Exception as e:
         print(f"Gemini API Error: {e}")
 
-    return _fallback_slides(topic, slide_count)
+    return []
 
 
 # ================= FAYL YARATISH =================
@@ -469,6 +413,7 @@ def build_pptx(data: dict, out_path: str) -> None:
     author = (data.get("author_title") or "").strip()
     ending = (data.get("ending_style") or "Kerak emas").strip()
     language = data.get("language", "O‘zbekcha")
+    has_images = bool(data.get("has_images"))
     has_ending = ending != "Kerak emas"
 
     content_count = total_slides - (2 if has_ending else 1)
@@ -488,6 +433,7 @@ def build_pptx(data: dict, out_path: str) -> None:
         top_bar.line.fill.background()
 
         if s_num == 1:
+            # Titul slaydi
             card = slide.shapes.add_shape(
                 MSO_SHAPE.ROUNDED_RECTANGLE, Inches(1.1), Inches(1.1), Inches(11.133), Inches(5.3)
             )
@@ -517,6 +463,7 @@ def build_pptx(data: dict, out_path: str) -> None:
                 p3.font.color.rgb = txt_color
 
         elif s_num == total_slides and has_ending:
+            # Yakuniy slayd
             card = slide.shapes.add_shape(
                 MSO_SHAPE.ROUNDED_RECTANGLE, Inches(1.4), Inches(1.7), Inches(10.533), Inches(4.1)
             )
@@ -534,13 +481,18 @@ def build_pptx(data: dict, out_path: str) -> None:
             p.font.color.rgb = acc_color
 
         else:
+            # Kontent slaydlari
             ai_idx = s_num - 2
-            slide_info = ai_slides[ai_idx] if ai_idx < len(ai_slides) else {
-                "title": f"{topic} — {s_num - 1}-bo‘lim",
-                "bullets": [f"«{topic}» mavzusining asosiy jihatlari."],
-            }
-            curr_title = slide_info["title"]
-            bullets = slide_info["bullets"]
+            if ai_slides and ai_idx < len(ai_slides):
+                curr_title = ai_slides[ai_idx]["title"]
+                bullets = ai_slides[ai_idx]["bullets"]
+            else:
+                curr_title = f"{topic} — {s_num - 1}-qism"
+                bullets = [
+                    f"«{topic}» mavzusining tegishli yo‘nalishi bo‘yicha tahlillar.",
+                    "Mavzuga oid amaliy misollar va asosiy ko‘rsatkichlar.",
+                    "Soha rivojlanishi yuzasidan shakllantirilgan xulosalar."
+                ]
 
             tb_title = slide.shapes.add_textbox(Inches(0.8), Inches(0.4), Inches(11.733), Inches(0.95))
             tf_t = tb_title.text_frame
@@ -551,21 +503,53 @@ def build_pptx(data: dict, out_path: str) -> None:
             pt.font.bold = True
             pt.font.color.rgb = acc_color
 
-            card = slide.shapes.add_shape(
-                MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.8), Inches(1.45), Inches(11.733), Inches(5.05)
-            )
-            card.fill.solid()
-            card.fill.fore_color.rgb = card_color
-            card.line.fill.background()
+            if has_images:
+                # Rasmli slayd (Ikki ustunli layout)
+                card_w = Inches(7.5)
+                card = slide.shapes.add_shape(
+                    MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.8), Inches(1.45), card_w, Inches(5.05)
+                )
+                card.fill.solid()
+                card.fill.fore_color.rgb = card_color
+                card.line.fill.background()
 
-            tb_body = slide.shapes.add_textbox(Inches(1.15), Inches(1.7), Inches(11.033), Inches(4.55))
+                tb_body = slide.shapes.add_textbox(Inches(1.0), Inches(1.65), Inches(7.1), Inches(4.55))
+                
+                # O'ng tarafdagi vizual rasm ramkasi
+                img_card = slide.shapes.add_shape(
+                    MSO_SHAPE.ROUNDED_RECTANGLE, Inches(8.6), Inches(1.45), Inches(3.933), Inches(5.05)
+                )
+                img_card.fill.solid()
+                img_card.fill.fore_color.rgb = card_color
+                img_card.line.color.rgb = acc_color
+
+                tb_img = slide.shapes.add_textbox(Inches(8.7), Inches(3.5), Inches(3.733), Inches(1.5))
+                tf_img = tb_img.text_frame
+                tf_img.word_wrap = True
+                p_img = tf_img.paragraphs[0]
+                p_img.text = f"🖼 {topic[:30]}\n(Vizual Manzara)"
+                p_img.font.size = Pt(16)
+                p_img.font.bold = True
+                p_img.font.color.rgb = acc_color
+            else:
+                # Rasmsiz to'liq matnli kartochka
+                card_w = Inches(11.733)
+                card = slide.shapes.add_shape(
+                    MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.8), Inches(1.45), card_w, Inches(5.05)
+                )
+                card.fill.solid()
+                card.fill.fore_color.rgb = card_color
+                card.line.fill.background()
+
+                tb_body = slide.shapes.add_textbox(Inches(1.15), Inches(1.7), Inches(11.033), Inches(4.55))
+
             btf = tb_body.text_frame
             btf.word_wrap = True
 
             for idx_b, b_text in enumerate(bullets):
                 bp = btf.paragraphs[0] if idx_b == 0 else btf.add_paragraph()
                 bp.text = f"•  {b_text[:220]}"
-                bp.font.size = Pt(19)
+                bp.font.size = Pt(18)
                 bp.font.color.rgb = txt_color
                 bp.space_after = Pt(12)
 
@@ -660,6 +644,10 @@ async def my_balance(message: Message):
 
 @router.callback_query(F.data == "topup:start")
 async def topup_start(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     await state.set_state(Flow.waiting_topup_amount)
     text = (
         "💳 <b>Balans to‘ldirish</b>\n\n"
@@ -669,7 +657,6 @@ async def topup_start(callback: CallbackQuery, state: FSMContext):
         "Admin to‘lovni tekshirib, balansingizni qo‘lda to‘ldirib beradi."
     )
     await callback.message.answer(text, parse_mode="HTML", reply_markup=back_kb())
-    await callback.answer()
 
 
 @router.message(Flow.waiting_topup_amount)
@@ -727,8 +714,11 @@ async def topup_receive_amount(message: Message, state: FSMContext, bot: Bot):
 
 @router.callback_query(F.data.startswith("adm_add:"))
 async def admin_quick_add(callback: CallbackQuery, bot: Bot):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     if not is_admin(callback.from_user.id):
-        await callback.answer("Faqat admin uchun!", show_alert=True)
         return
 
     _, req_id_s, uid_s, amt_s = callback.data.split(":")
@@ -755,13 +745,15 @@ async def admin_quick_add(callback: CallbackQuery, bot: Bot):
         )
     except Exception:
         pass
-    await callback.answer("Balans qo‘shildi!")
 
 
 @router.callback_query(F.data.startswith("adm_custom:"))
 async def admin_custom_amount_prompt(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     if not is_admin(callback.from_user.id):
-        await callback.answer("Faqat admin uchun!", show_alert=True)
         return
 
     _, req_id_s, uid_s = callback.data.split(":")
@@ -771,7 +763,6 @@ async def admin_custom_amount_prompt(callback: CallbackQuery, state: FSMContext)
         f"✍️ Foydalanuvchi <code>{uid_s}</code> uchun qo‘lda qo‘shiladigan summani kiriting (masalan: <code>35000</code>):",
         parse_mode="HTML",
     )
-    await callback.answer()
 
 
 @router.message(Flow.waiting_admin_custom_amount)
@@ -814,8 +805,11 @@ async def admin_custom_amount_save(message: Message, state: FSMContext, bot: Bot
 
 @router.callback_query(F.data.startswith("adm_reject:"))
 async def admin_reject_topup(callback: CallbackQuery, bot: Bot):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     if not is_admin(callback.from_user.id):
-        await callback.answer("Faqat admin uchun!", show_alert=True)
         return
 
     _, req_id_s, uid_s = callback.data.split(":")
@@ -834,7 +828,6 @@ async def admin_reject_topup(callback: CallbackQuery, bot: Bot):
         await bot.send_message(uid, "❌ Balans to‘ldirish so‘rovingiz rad etildi. Qayta urinib ko‘ring.")
     except Exception:
         pass
-    await callback.answer("Rad etildi")
 
 
 @router.message(Command("addbal"))
@@ -874,8 +867,11 @@ async def admin_panel_msg(message: Message):
 
 @router.callback_query(F.data == "adm:pending")
 async def adm_show_pending(callback: CallbackQuery):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     if not is_admin(callback.from_user.id):
-        await callback.answer("Faqat admin uchun!", show_alert=True)
         return
     pending = cur.execute(
         "SELECT id, user_id, claimed_amount, created_at FROM topup_requests WHERE status = 'pending' ORDER BY id DESC LIMIT 10"
@@ -889,13 +885,15 @@ async def adm_show_pending(callback: CallbackQuery):
                 parse_mode="HTML",
                 reply_markup=admin_topup_kb(req_id, uid),
             )
-    await callback.answer()
 
 
 @router.callback_query(F.data == "adm:stats")
 async def adm_show_stats(callback: CallbackQuery):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     if not is_admin(callback.from_user.id):
-        await callback.answer("Faqat admin uchun!", show_alert=True)
         return
     users_cnt = cur.execute("SELECT COUNT(*) FROM users").fetchone()[0]
     works_cnt = cur.execute("SELECT COUNT(*) FROM works").fetchone()[0]
@@ -907,7 +905,6 @@ async def adm_show_stats(callback: CallbackQuery):
         f"⏳ Kutilayotgan to‘lovlar: <b>{pending_cnt} ta</b>"
     )
     await callback.message.answer(text, parse_mode="HTML")
-    await callback.answer()
 
 
 @router.message(F.text == "👥 Taklif qilish")
@@ -1002,11 +999,15 @@ async def receive_topic(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("sl_cnt:"))
 async def pick_slide_count(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
     choice = callback.data.split(":")[1]
     if choice == "custom":
         await state.set_state(Flow.waiting_custom_slides)
         await callback.message.answer("✏️ Slaydlar sonini kiriting (5 dan 30 gacha):")
-        await callback.answer()
         return
 
     cnt = int(choice)
@@ -1021,7 +1022,6 @@ async def pick_slide_count(callback: CallbackQuery, state: FSMContext):
         "🎨 <b>Dizaynni tanlang:</b>"
     ).replace(",", " ")
     await callback.message.answer(summary, parse_mode="HTML", reply_markup=design_kb())
-    await callback.answer()
 
 
 @router.message(Flow.waiting_custom_slides)
@@ -1047,18 +1047,25 @@ async def receive_custom_slides(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("dsg:"))
 async def pick_design(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     idx = int(callback.data.split(":")[1])
     await state.update_data(design_idx=idx)
     txt = (
         "🖼 <b>Slaydlarga mavzuga mos rasmlar qo‘shilsinmi?</b>\n\n"
-        "<i>Rasmli taqdimot chiroyliroq chiqadi, tayyorlash biroz uzoqroq davom etadi.</i>"
+        "<i>Rasmli taqdimot chiroyliroq chiqadi.</i>"
     )
     await callback.message.answer(txt, parse_mode="HTML", reply_markup=images_kb())
-    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("img:"))
 async def pick_images(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     has_img = int(callback.data.split(":")[1])
     await state.update_data(has_images=has_img)
     txt = (
@@ -1066,11 +1073,14 @@ async def pick_images(callback: CallbackQuery, state: FSMContext):
         "<i>«E’tiboringiz uchun rahmat!» slaydi. Uslubni tanlang 👇</i>"
     )
     await callback.message.answer(txt, parse_mode="HTML", reply_markup=ending_kb())
-    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("end:"))
 async def pick_ending(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     ending = callback.data.split(":", 1)[1]
     await state.update_data(ending_style=ending)
     await state.set_state(Flow.waiting_author)
@@ -1080,7 +1090,6 @@ async def pick_ending(callback: CallbackQuery, state: FSMContext):
         "Kerak bo‘lmasa o‘tkazib yuboring."
     )
     await callback.message.answer(txt, parse_mode="HTML", reply_markup=author_kb())
-    await callback.answer()
 
 
 @router.message(Flow.waiting_author)
@@ -1091,9 +1100,12 @@ async def receive_author(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "auth:skip")
 async def skip_author(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     await state.update_data(author_title="")
     await show_order_confirmation(callback.message, state, callback.from_user.id)
-    await callback.answer()
 
 
 async def show_order_confirmation(target_msg: Message, state: FSMContext, user_id: int):
@@ -1126,9 +1138,14 @@ async def show_order_confirmation(target_msg: Message, state: FSMContext, user_i
 
 @router.callback_query(F.data == "ord:confirm")
 async def confirm_order(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
     data = await state.get_data()
     if not data or "topic" not in data:
-        await callback.answer("Buyurtma topilmadi.", show_alert=True)
+        await callback.message.answer("Buyurtma ma’lumotlari topilmadi, qaytadan urinib ko‘ring.")
         return
 
     price = int(data.get("price", 2800))
@@ -1144,7 +1161,6 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext):
             parse_mode="HTML",
             reply_markup=balance_inline_kb(),
         )
-        await callback.answer("Balans yetarli emas!", show_alert=True)
         return
 
     await state.clear()
@@ -1193,18 +1209,21 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext):
         ).replace(",", " "),
         parse_mode="HTML",
     )
-    await callback.answer()
 
 
 @router.callback_query(F.data.in_({"flow:cancel", "flow:back_topic"}))
 async def flow_cancel_or_back(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
     if callback.data == "flow:back_topic":
         await state.set_state(Flow.waiting_topic)
         await callback.message.answer("✍️ Yangi mavzuni kiriting:", reply_markup=back_kb())
     else:
         await state.clear()
         await callback.message.answer("❌ Jarayon bekor qilindi.", reply_markup=main_menu_kb(callback.from_user.id))
-    await callback.answer()
 
 
 # ================= RENDER WEB SERVER + BOT =================
